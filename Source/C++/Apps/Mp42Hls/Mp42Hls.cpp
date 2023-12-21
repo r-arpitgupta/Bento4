@@ -93,6 +93,8 @@ static struct _Options {
     const char*           encryption_key_format_versions;
     AP4_Array<AP4_String> encryption_key_lines;
     AP4_UI64              pcr_offset;
+    AP4_Array<double>     cue_points;
+    double                cue_point_timestamp_diff;
 } Options;
 
 static struct _Stats {
@@ -187,6 +189,22 @@ PrintUsageAndExit()
             "    (the IV and METHOD parameters will automatically be added, so they must not appear in the <ext-x-key-line> argument)\n"
             );
     exit(1);
+}
+
+static bool IsCuePointAtSample(AP4_Array<double> cue_points, double timestamp){
+     for (uint i = 0; i < cue_points.ItemCount(); i++){
+         if (cue_points[i] == 0){
+             return false;
+         }
+        if ((cue_points[i]-timestamp) > Options.cue_point_timestamp_diff){
+            return false;
+        }
+        if ((cue_points[i] > timestamp) && ((cue_points[i]-timestamp)  < Options.cue_point_timestamp_diff))
+            return true;
+        if ((cue_points[i] < timestamp) && ((timestamp - cue_points[i])  < Options.cue_point_timestamp_diff))
+            return true;
+     }
+    return false;
 }
 
 /*----------------------------------------------------------------------
@@ -1064,6 +1082,7 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     char                    string_buffer[4096];
     SampleEncrypter*        sample_encrypter = NULL;
     AP4_Result              result = AP4_SUCCESS;
+    AP4_Array<bool>         cue_points_positions;
     
     // prime the samples
     if (audio_reader) {
@@ -1110,8 +1129,18 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
             } else {
                 segment_duration = audio_ts - last_ts;
             }
+            if (Options.verbose) {
+                printf("Segment %d, duration=%.2f, %.5f video_ts, %.5f audio_ts, %.5f last_ts\n",
+                               segment_number,
+                               segment_duration,
+                               video_ts,
+                               audio_ts,
+                               last_ts);
+            }
+            bool is_cue_point_atsample;
+            is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
             if ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
-                chosen_track == NULL) {
+                chosen_track == NULL || is_cue_point_atsample) {
                 if (video_track) {
                     last_ts = video_ts;
                 } else {
@@ -1135,7 +1164,12 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
                     segment_sizes.Append(segment_size);
                     segment_positions.Append(segment_position);
                     segment_durations.Append(segment_duration);
-            
+                    if (is_cue_point_atsample){
+                        cue_points_positions.Append(true);
+                    } else{
+                        cue_points_positions.Append(false);
+                    }
+
                     if (segment_duration != 0.0) {
                         double segment_bitrate = 8.0*(double)segment_size/segment_duration;
                         if (segment_bitrate > Stats.max_segment_bitrate) {
@@ -1447,6 +1481,9 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
         sprintf(string_buffer, Options.segment_url_template, i);
         playlist->WriteString(string_buffer);
         playlist->WriteString("\r\n");
+        if (cue_points_positions[i]==true){
+            playlist->WriteString("#EXT-X-CUE-OUT\r\n#EXT-X-CUE-IN\r\n");
+        }
     }
                     
     playlist->WriteString("#EXT-X-ENDLIST\r\n");
@@ -1780,6 +1817,29 @@ main(int argc, char** argv)
                 return 1;
             }
             Options.encryption_key_lines.Append(*args++);
+        } else if (!strcmp(arg, "--cue-points")) {
+            if (*args == NULL) {
+                fprintf(stderr, "ERROR: --cue-points requires an argument\n");
+                return 1;
+            }
+            const char* cues_str_tmp=*args++;
+            char *cues_str=(char*)cues_str_tmp;
+            char *token = strtok(cues_str, ",");
+            while (token != NULL)
+            {
+                Options.cue_points.Append(atof(token));
+                token = strtok(NULL, ",");
+            }
+            fprintf(stderr, "cue_point_count:%d\n",Options.cue_points.ItemCount());
+            for (uint i = 0; i < Options.cue_points.ItemCount(); ++i){
+                fprintf(stderr, "cue_point:%.5f\n",Options.cue_points[i]);
+            }
+        } else if (!strcmp(arg, "--cue-point-timestamp-diff")){
+            if (*args == NULL) {
+                fprintf(stderr, "ERROR: --cue-point-timestamp-diff requires an argument\n");
+                return 1;
+            }
+            Options.cue_point_timestamp_diff=atof(*args++);
         } else if (Options.input == NULL) {
             Options.input = arg;
         } else {
