@@ -1142,8 +1142,14 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
                                audio_ts,
                                last_ts);
             }
+
             bool is_cue_point_atsample;
-            is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
+            if (video_track) {
+                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
+            } else {
+                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, audio_ts);
+            }
+
             if ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
                 chosen_track == NULL || is_cue_point_atsample) {
                 if (video_track) {
