@@ -187,6 +187,11 @@ PrintUsageAndExit()
             "    This option can be used multiple times, once for each preformatted key line to be included in the playlist.\n"
             "    (this option is mutually exclusive with the --encryption-key-uri, --encryption-key-format and --encryption-key-format-versions options)\n"
             "    (the IV and METHOD parameters will automatically be added, so they must not appear in the <ext-x-key-line> argument)\n"
+            "  --ad-cues <start_time[;start_time]…>\n"
+            "    List of cuepoint markers separated by semicolon. The start_time represents the start of the cue marker in seconds (double precision).\n"
+            "    Segments will be terminated at the next key frame to the designated start times and '#EXT-X-PLACEMENT-OPPORTUNITY' tag will be inserted after the segment in media playlist.\n"
+            "  --cue-point-timestamp-diff\n"
+            "    Maximum timestamp difference in seconds for segmentation on cue points (default: 0.020)\n"
             );
     exit(1);
 }
@@ -1482,7 +1487,7 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
         playlist->WriteString(string_buffer);
         playlist->WriteString("\r\n");
         if (cue_points_positions[i]==true){
-            playlist->WriteString("#EXT-X-CUE-OUT\r\n#EXT-X-CUE-IN\r\n");
+            playlist->WriteString("#EXT-X-PLACEMENT-OPPORTUNITY\r\n");
         }
     }
                     
@@ -1817,18 +1822,16 @@ main(int argc, char** argv)
                 return 1;
             }
             Options.encryption_key_lines.Append(*args++);
-        } else if (!strcmp(arg, "--cue-points")) {
+        } else if (!strcmp(arg, "--ad-cues")) {
             if (*args == NULL) {
-                fprintf(stderr, "ERROR: --cue-points requires an argument\n");
+                fprintf(stderr, "ERROR: --ad-cues requires an argument\n");
                 return 1;
             }
-            const char* cues_str_tmp=*args++;
-            char *cues_str=(char*)cues_str_tmp;
-            char *token = strtok(cues_str, ",");
+            char *token = strtok((char*)*args++, ";");
             while (token != NULL)
             {
                 Options.cue_points.Append(atof(token));
-                token = strtok(NULL, ",");
+                token = strtok(NULL, ";");
             }
             fprintf(stderr, "cue_point_count:%d\n",Options.cue_points.ItemCount());
             for (uint i = 0; i < Options.cue_points.ItemCount(); ++i){
