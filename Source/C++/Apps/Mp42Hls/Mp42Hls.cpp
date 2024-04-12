@@ -204,10 +204,16 @@ static bool IsCuePointAtSample(AP4_Array<double> cue_points, double timestamp){
         if ((cue_points[i]-timestamp) > Options.cue_point_timestamp_diff){
             return false;
         }
-        if ((cue_points[i] > timestamp) && ((cue_points[i]-timestamp)  < Options.cue_point_timestamp_diff))
+        if ((cue_points[i] >= timestamp) && ((cue_points[i]-timestamp)  < Options.cue_point_timestamp_diff)){
+            fprintf(stderr, "cue_point:%.5f\n",cue_points[i]);
+            fprintf(stderr, "timestamp:%.5f\n",timestamp);
             return true;
-        if ((cue_points[i] < timestamp) && ((timestamp - cue_points[i])  < Options.cue_point_timestamp_diff))
+        }
+        if ((cue_points[i] < timestamp) && ((timestamp - cue_points[i])  < Options.cue_point_timestamp_diff)){
+            fprintf(stderr, "cue_point:%.5f\n",cue_points[i]);
+            fprintf(stderr, "timestamp:%.5f\n",timestamp);
             return true;
+        }
      }
     return false;
 }
