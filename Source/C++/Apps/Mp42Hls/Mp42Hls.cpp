@@ -1653,6 +1653,7 @@ main(int argc, char** argv)
     AP4_SetMemory(Options.encryption_key, 0, sizeof(Options.encryption_key));
     AP4_SetMemory(Options.encryption_iv,  0, sizeof(Options.encryption_iv));
     AP4_SetMemory(&Stats, 0, sizeof(Stats));
+    Options.cue_point_timestamp_diff       = 0.020;
 
     // parse command line
     AP4_Result result;
