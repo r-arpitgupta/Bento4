@@ -197,10 +197,10 @@ PrintUsageAndExit()
 }
 
 static bool IsCuePointAtSample(AP4_Array<double> cue_points, double timestamp){
-     for (uint i = 0; i < cue_points.ItemCount(); i++){
-         if (cue_points[i] == 0){
-             return false;
-         }
+     for (size_t i = 0; i < cue_points.ItemCount(); i++){
+        if (cue_points[i] == 0){
+            return false;
+        }
         if ((cue_points[i]-timestamp) > Options.cue_point_timestamp_diff){
             return false;
         }
@@ -1847,7 +1847,7 @@ main(int argc, char** argv)
                 token = strtok(NULL, ";");
             }
             fprintf(stderr, "cue_point_count:%d\n",Options.cue_points.ItemCount());
-            for (uint i = 0; i < Options.cue_points.ItemCount(); ++i){
+            for (size_t i = 0; i < Options.cue_points.ItemCount(); ++i){
                 fprintf(stderr, "cue_point:%.5f\n",Options.cue_points[i]);
             }
         } else if (!strcmp(arg, "--cue-point-timestamp-diff")){
