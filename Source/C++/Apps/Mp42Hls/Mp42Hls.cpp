@@ -94,7 +94,7 @@ static struct _Options {
     AP4_Array<AP4_String> encryption_key_lines;
     AP4_UI64              pcr_offset;
     AP4_Array<double>     cue_points;
-    double                cue_point_timestamp_diff;
+    bool                  video_stream_idx_zero;
 } Options;
 
 static struct _Stats {
@@ -190,31 +190,19 @@ PrintUsageAndExit()
             "  --ad-cues <start_time[;start_time]…>\n"
             "    List of cuepoint markers separated by semicolon. The start_time represents the start of the cue marker in seconds (double precision).\n"
             "    Segments will be terminated at the next key frame to the designated start times and '#EXT-X-PLACEMENT-OPPORTUNITY' tag will be inserted after the segment in media playlist.\n"
-            "  --cue-point-timestamp-diff\n"
-            "    Maximum timestamp difference in seconds for segmentation on cue points (default: 0.020)\n"
+            "  --video-stream-idx-zero \n"
+            "    whether video stream idx is zero or not.\n"
             );
     exit(1);
 }
 
-static bool IsCuePointAtSample(AP4_Array<double> cue_points, double timestamp){
-     for (size_t i = 0; i < cue_points.ItemCount(); i++){
-        if (cue_points[i] == 0){
-            return false;
-        }
-        if ((cue_points[i]-timestamp) > Options.cue_point_timestamp_diff){
-            return false;
-        }
-        if ((cue_points[i] >= timestamp) && ((cue_points[i]-timestamp)  < Options.cue_point_timestamp_diff)){
-            fprintf(stderr, "cue_point:%.5f\n",cue_points[i]);
-            fprintf(stderr, "timestamp:%.5f\n",timestamp);
+static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp){
+    if (cue_points.ItemCount()>0){
+        if (cue_points[cue_points.ItemCount()-1]<=timestamp){
+            cue_points.RemoveLast();
             return true;
         }
-        if ((cue_points[i] < timestamp) && ((timestamp - cue_points[i])  < Options.cue_point_timestamp_diff)){
-            fprintf(stderr, "cue_point:%.5f\n",cue_points[i]);
-            fprintf(stderr, "timestamp:%.5f\n",timestamp);
-            return true;
-        }
-     }
+    }
     return false;
 }
 
@@ -1122,9 +1110,14 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
         }
         if (video_track && !video_eos) {
             if (audio_track) {
-                if (video_ts <= audio_ts) {
+                double aPts = (double)audio_sample.GetCts()/(double)audio_track->GetMediaTimeScale();
+                double vPts = (double)video_sample.GetCts()/(double)video_track->GetMediaTimeScale();
+                if (vPts <= aPts) {
                     chosen_track = video_track;
                 }
+                // if (video_ts <= audio_ts) {
+                //     chosen_track = video_track;
+                // }
             } else {
                 chosen_track = video_track;
             }
@@ -1285,7 +1278,7 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
                 }
                 
                 ts_writer->WritePAT(*segment_output);
-                ts_writer->WritePMT(*segment_output);
+                ts_writer->WritePMT(*segment_output, Options.video_stream_idx_zero);
             } else if (packed_writer && chosen_track == audio_track) {
                 AP4_DataBuffer       private_extension_buffer;
                 const char*          private_extension_name = NULL;
@@ -1614,6 +1607,20 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     return result;
 }
 
+void sortArray(AP4_Array<double>& arr, int size, bool ascending = true) {
+    for (int i = 0; i < size - 1; ++i) {
+        for (int j = 0; j < size - i - 1; ++j) {
+            // Compare elements based on the order
+            if ((ascending && arr[j] > arr[j + 1]) || (!ascending && arr[j] < arr[j + 1])) {
+                // Swap the elements
+                double temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
+
 /*----------------------------------------------------------------------
 |   main
 +---------------------------------------------------------------------*/
@@ -1653,7 +1660,6 @@ main(int argc, char** argv)
     AP4_SetMemory(Options.encryption_key, 0, sizeof(Options.encryption_key));
     AP4_SetMemory(Options.encryption_iv,  0, sizeof(Options.encryption_iv));
     AP4_SetMemory(&Stats, 0, sizeof(Stats));
-    Options.cue_point_timestamp_diff       = 0.020;
 
     // parse command line
     AP4_Result result;
@@ -1846,16 +1852,14 @@ main(int argc, char** argv)
                 Options.cue_points.Append(atof(token));
                 token = strtok(NULL, ";");
             }
+            sortArray(Options.cue_points, Options.cue_points.ItemCount());
             fprintf(stderr, "cue_point_count:%d\n",Options.cue_points.ItemCount());
             for (size_t i = 0; i < Options.cue_points.ItemCount(); ++i){
                 fprintf(stderr, "cue_point:%.5f\n",Options.cue_points[i]);
             }
-        } else if (!strcmp(arg, "--cue-point-timestamp-diff")){
-            if (*args == NULL) {
-                fprintf(stderr, "ERROR: --cue-point-timestamp-diff requires an argument\n");
-                return 1;
-            }
-            Options.cue_point_timestamp_diff=atof(*args++);
+            sortArray(Options.cue_points, Options.cue_points.ItemCount(), false);
+        } else if (!strcmp(arg, "--video-stream-idx-zero")) {
+            Options.video_stream_idx_zero = true;
         } else if (Options.input == NULL) {
             Options.input = arg;
         } else {

@@ -151,7 +151,7 @@ public:
     Stream* GetPAT() { return m_PAT; }
     Stream* GetPMT() { return m_PMT; }
     AP4_Result WritePAT(AP4_ByteStream& output);
-    AP4_Result WritePMT(AP4_ByteStream& output);
+    AP4_Result WritePMT(AP4_ByteStream& output, bool video_stream_idx_zero=false);
     AP4_Result SetAudioStream(AP4_UI32        timescale,
                               AP4_UI08        stream_type,
                               AP4_UI16        stream_id,

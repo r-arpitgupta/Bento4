@@ -801,7 +801,7 @@ AP4_Mpeg2TsWriter::WritePAT(AP4_ByteStream& output)
 |   AP4_Mpeg2TsWriter::WritePMT
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_Mpeg2TsWriter::WritePMT(AP4_ByteStream& output)
+AP4_Mpeg2TsWriter::WritePMT(AP4_ByteStream& output, bool video_stream_idx_zero)
 {
     // check that we have at least one media stream
     if (m_Audio == NULL && m_Video == NULL) {
@@ -840,29 +840,62 @@ AP4_Mpeg2TsWriter::WritePMT(AP4_ByteStream& output)
     writer.Write(pcr_pid, 13); // PCD_PID
     writer.Write(0xF, 4);      // reserved
     writer.Write(0, 12);       // program_info_length
-    
-    if (m_Audio) {
-        writer.Write(m_Audio->m_StreamType, 8);                // stream_type
-        writer.Write(0x7, 3);                                  // reserved
-        writer.Write(m_Audio->GetPID(), 13);                   // elementary_PID
-        writer.Write(0xF, 4);                                  // reserved
-        writer.Write(m_Audio->m_Descriptor.GetDataSize(), 12); // ES_info_length
-        for (unsigned int i=0; i<m_Audio->m_Descriptor.GetDataSize(); i++) {
-            writer.Write(m_Audio->m_Descriptor.GetData()[i], 8);
+
+    if (video_stream_idx_zero)
+    {
+        if (m_Video)
+        {
+            writer.Write(m_Video->m_StreamType, 8);                // stream_type
+            writer.Write(0x7, 3);                                  // reserved
+            writer.Write(m_Video->GetPID(), 13);                   // elementary_PID
+            writer.Write(0xF, 4);                                  // reserved
+            writer.Write(m_Video->m_Descriptor.GetDataSize(), 12); // ES_info_length
+            for (unsigned int i = 0; i < m_Video->m_Descriptor.GetDataSize(); i++)
+            {
+                writer.Write(m_Video->m_Descriptor.GetData()[i], 8);
+            }
+        }
+        if (m_Audio)
+        {
+            writer.Write(m_Audio->m_StreamType, 8);                // stream_type
+            writer.Write(0x7, 3);                                  // reserved
+            writer.Write(m_Audio->GetPID(), 13);                   // elementary_PID
+            writer.Write(0xF, 4);                                  // reserved
+            writer.Write(m_Audio->m_Descriptor.GetDataSize(), 12); // ES_info_length
+            for (unsigned int i = 0; i < m_Audio->m_Descriptor.GetDataSize(); i++)
+            {
+                writer.Write(m_Audio->m_Descriptor.GetData()[i], 8);
+            }
         }
     }
-    
-    if (m_Video) {
-        writer.Write(m_Video->m_StreamType, 8);                // stream_type
-        writer.Write(0x7, 3);                                  // reserved
-        writer.Write(m_Video->GetPID(), 13);                   // elementary_PID
-        writer.Write(0xF, 4);                                  // reserved
-        writer.Write(m_Video->m_Descriptor.GetDataSize(), 12); // ES_info_length
-        for (unsigned int i=0; i<m_Video->m_Descriptor.GetDataSize(); i++) {
-            writer.Write(m_Video->m_Descriptor.GetData()[i], 8);
+    else
+    {
+        if (m_Audio)
+        {
+            writer.Write(m_Audio->m_StreamType, 8);                // stream_type
+            writer.Write(0x7, 3);                                  // reserved
+            writer.Write(m_Audio->GetPID(), 13);                   // elementary_PID
+            writer.Write(0xF, 4);                                  // reserved
+            writer.Write(m_Audio->m_Descriptor.GetDataSize(), 12); // ES_info_length
+            for (unsigned int i = 0; i < m_Audio->m_Descriptor.GetDataSize(); i++)
+            {
+                writer.Write(m_Audio->m_Descriptor.GetData()[i], 8);
+            }
+        }
+        if (m_Video)
+        {
+            writer.Write(m_Video->m_StreamType, 8);                // stream_type
+            writer.Write(0x7, 3);                                  // reserved
+            writer.Write(m_Video->GetPID(), 13);                   // elementary_PID
+            writer.Write(0xF, 4);                                  // reserved
+            writer.Write(m_Video->m_Descriptor.GetDataSize(), 12); // ES_info_length
+            for (unsigned int i = 0; i < m_Video->m_Descriptor.GetDataSize(); i++)
+            {
+                writer.Write(m_Video->m_Descriptor.GetData()[i], 8);
+            }
         }
     }
-    
+
     writer.Write(ComputeCRC(writer.GetData()+1, section_length-1), 32); // CRC
     
     output.Write(writer.GetData(), section_length+4);
