@@ -80,7 +80,7 @@ static struct _Options {
     bool                  show_info;
     const char*           segment_filename_template;
     const char*           segment_url_template;
-    unsigned int          segment_duration;
+    double                segment_duration;
     unsigned int          segment_duration_threshold;
     const char*           allow_cache;
     const char*           encryption_key_hex;
@@ -1082,6 +1082,7 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     SampleEncrypter*        sample_encrypter = NULL;
     AP4_Result              result = AP4_SUCCESS;
     AP4_Array<bool>         cue_points_positions;
+    double                  drift = 0.0;
     
     // prime the samples
     if (audio_reader) {
@@ -1146,11 +1147,27 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
             if (video_track) {
                 is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
             } else {
+                double cue_point=0.0;
+                if (Options.cue_points.ItemCount()>0){
+                    if (Options.cue_points[Options.cue_points.ItemCount()-1])
+                    {
+                        cue_point= Options.cue_points[Options.cue_points.ItemCount()-1];
+                    }
+                }
                 is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, audio_ts);
+                if (is_cue_point_atsample){
+                    drift=audio_ts-cue_point;
+                }
             }
-
             if ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
-                chosen_track == NULL || is_cue_point_atsample) {
+                chosen_track == NULL || is_cue_point_atsample ||
+                (!video_track && audio_track && segment_duration >= (double)Options.segment_duration-drift )) {
+                if (!video_track && audio_track && !is_cue_point_atsample) {
+                    drift +=  segment_duration-Options.segment_duration;
+                }
+                if (!video_track && audio_track && Options.verbose){
+                    printf("drift: %f\n", drift);
+                }
                 if (video_track) {
                     last_ts = video_ts;
                 } else {
@@ -1682,7 +1699,7 @@ main(int argc, char** argv)
                 fprintf(stderr, "ERROR: --segment-duration requires a number\n");
                 return 1;
             }
-            Options.segment_duration = (unsigned int)strtoul(*args++, NULL, 10);
+            Options.segment_duration = (double)strtod(*args++, NULL);
         } else if (!strcmp(arg, "--segment-duration-threshold")) {
             if (*args == NULL) {
                 fprintf(stderr, "ERROR: --segment-duration-threshold requires a number\n");
