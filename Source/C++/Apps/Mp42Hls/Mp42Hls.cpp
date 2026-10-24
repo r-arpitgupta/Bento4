@@ -1036,6 +1036,27 @@ ReadSample(SampleReader&   reader,
 }
 
 /*----------------------------------------------------------------------
+|   GetEditListMediaTime
++---------------------------------------------------------------------*/
+// Media time (in seconds) at which presentation starts, taken from the
+// first non-empty edit list entry. Returns 0 when there is no edit list.
+static double
+GetEditListMediaTime(AP4_Track* track)
+{
+    if (track == NULL || track->GetTrakAtom() == NULL) return 0.0;
+    AP4_TrakAtom* trak = const_cast<AP4_TrakAtom*>(track->GetTrakAtom());
+    AP4_ElstAtom* elst = AP4_DYNAMIC_CAST(AP4_ElstAtom, trak->FindChild("edts/elst"));
+    if (elst == NULL || track->GetMediaTimeScale() == 0) return 0.0;
+    AP4_Array<AP4_ElstEntry>& entries = elst->GetEntries();
+    for (unsigned int i = 0; i < entries.ItemCount(); i++) {
+        if (entries[i].m_MediaTime >= 0) {
+            return (double)entries[i].m_MediaTime/(double)track->GetMediaTimeScale();
+        }
+    }
+    return 0.0;
+}
+
+/*----------------------------------------------------------------------
 |   WriteSamples
 +---------------------------------------------------------------------*/
 static AP4_Result
@@ -1083,7 +1104,9 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     AP4_Result              result = AP4_SUCCESS;
     AP4_Array<bool>         cue_points_positions;
     double                  drift = 0.0;
-    
+    double                  audio_media_time = GetEditListMediaTime(audio_track);
+    double                  video_media_time = GetEditListMediaTime(video_track);
+
     // prime the samples
     if (audio_reader) {
         result = ReadSample(*audio_reader, *audio_track, audio_sample, audio_sample_data, audio_ts, audio_frame_duration, audio_eos);
@@ -1110,7 +1133,15 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
             }
         }
         if (video_track && !video_eos) {
-            if (audio_track) {
+            if (audio_track && audio_eos) {
+                // audio has ended: keep the video samples that start before the
+                // end of the audio, compared on the presentation timeline (edit
+                // lists applied). audio_ts is the audio end once audio_eos is set.
+                double vPts = (double)video_sample.GetCts()/(double)video_track->GetMediaTimeScale() - video_media_time;
+                if (vPts + 1e-6 < audio_ts - audio_media_time) {
+                    chosen_track = video_track;
+                }
+            } else if (audio_track) {
                 double aPts = (double)audio_sample.GetCts()/(double)audio_track->GetMediaTimeScale();
                 double vPts = (double)video_sample.GetCts()/(double)video_track->GetMediaTimeScale();
                 if (vPts <= aPts) {
