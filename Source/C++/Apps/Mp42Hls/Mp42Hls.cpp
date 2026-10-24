@@ -196,13 +196,25 @@ PrintUsageAndExit()
     exit(1);
 }
 
-static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp, double tolerance = 0.0, bool skip_missed = false){
-    // cue points already behind this sample by more than the tolerance had no
-    // sync sample on them; placing them here would put the marker late
-    while (skip_missed && cue_points.ItemCount()>0 && cue_points[cue_points.ItemCount()-1]<timestamp-tolerance){
-        fprintf(stderr, "WARNING: skipping cue point %.5f, no sync sample at it (next sync sample at %.5f)\n",
-                cue_points[cue_points.ItemCount()-1], timestamp);
-        cue_points.RemoveLast();
+static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp, double tolerance = 0.0, bool merge_pending = false){
+    if (merge_pending) {
+        // every cue point up to this sync sample is placed here once; a cue point
+        // with no sync sample on it lands on the next one, and further cue points
+        // before the same sync sample are dropped instead of carried to later ones
+        unsigned int placed = 0;
+        while (cue_points.ItemCount()>0 && cue_points[cue_points.ItemCount()-1]<=timestamp+tolerance){
+            double cue_point = cue_points[cue_points.ItemCount()-1];
+            if (placed) {
+                fprintf(stderr, "WARNING: dropping cue point %.5f, a cue point is already placed at sync sample %.5f\n",
+                        cue_point, timestamp);
+            } else if (cue_point<timestamp-tolerance) {
+                fprintf(stderr, "WARNING: cue point %.5f has no sync sample, placed at next sync sample %.5f\n",
+                        cue_point, timestamp);
+            }
+            cue_points.RemoveLast();
+            ++placed;
+        }
+        return placed>0;
     }
     if (cue_points.ItemCount()>0){
         if (cue_points[cue_points.ItemCount()-1]<=timestamp+tolerance){
@@ -1188,7 +1200,7 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
             bool is_cue_point_atsample;
             if (video_track) {
                 // a sync sample is forced on each cue point: match it within half a
-                // frame and skip cue points that no sync sample landed on
+                // frame, and place at most one cue point per sync sample
                 is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts, video_frame_duration/2.0, true);
             } else {
                 double cue_point=0.0;
