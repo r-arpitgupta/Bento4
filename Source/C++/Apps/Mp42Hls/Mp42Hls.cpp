@@ -196,9 +196,16 @@ PrintUsageAndExit()
     exit(1);
 }
 
-static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp){
+static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp, double tolerance = 0.0, bool skip_missed = false){
+    // cue points already behind this sample by more than the tolerance had no
+    // sync sample on them; placing them here would put the marker late
+    while (skip_missed && cue_points.ItemCount()>0 && cue_points[cue_points.ItemCount()-1]<timestamp-tolerance){
+        fprintf(stderr, "WARNING: skipping cue point %.5f, no sync sample at it (next sync sample at %.5f)\n",
+                cue_points[cue_points.ItemCount()-1], timestamp);
+        cue_points.RemoveLast();
+    }
     if (cue_points.ItemCount()>0){
-        if (cue_points[cue_points.ItemCount()-1]<=timestamp){
+        if (cue_points[cue_points.ItemCount()-1]<=timestamp+tolerance){
             cue_points.RemoveLast();
             return true;
         }
@@ -1106,6 +1113,10 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     double                  drift = 0.0;
     double                  audio_media_time = GetEditListMediaTime(audio_track);
     double                  video_media_time = GetEditListMediaTime(video_track);
+    double                  audio_end = 0.0;
+    if (audio_track && audio_track->GetMediaTimeScale()) {
+        audio_end = (double)audio_track->GetMediaDuration()/(double)audio_track->GetMediaTimeScale();
+    }
 
     // prime the samples
     if (audio_reader) {
@@ -1176,7 +1187,9 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
 
             bool is_cue_point_atsample;
             if (video_track) {
-                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
+                // a sync sample is forced on each cue point: match it within half a
+                // frame and skip cue points that no sync sample landed on
+                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts, video_frame_duration/2.0, true);
             } else {
                 double cue_point=0.0;
                 if (Options.cue_points.ItemCount()>0){
@@ -1190,9 +1203,15 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
                     drift=audio_ts-cue_point;
                 }
             }
-            if ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
+            // audio only: the audio left after the last boundary is no longer than
+            // the priming (edit list media time) plus one frame; keep it in the
+            // current segment instead of writing a near-empty last segment
+            bool is_audio_tail = !video_track && audio_track && chosen_track != NULL && !is_cue_point_atsample &&
+                                 audio_end > 0.0 && audio_end-audio_ts <= audio_media_time+audio_frame_duration+1e-6;
+            if (!is_audio_tail &&
+                ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
                 chosen_track == NULL || is_cue_point_atsample ||
-                (!video_track && audio_track && segment_duration >= (double)Options.segment_duration-drift )) {
+                (!video_track && audio_track && segment_duration >= (double)Options.segment_duration-drift ))) {
                 if (!video_track && audio_track && !is_cue_point_atsample) {
                     drift +=  segment_duration-Options.segment_duration;
                 }
