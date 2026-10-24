@@ -413,7 +413,7 @@ class Mp4Track:
             self.width  = sample_desc['width']
             self.height = sample_desc['height']
 
-            # add dolby vision signaling if present
+            # add dolby vision signaling if present; otherwise detect HDR10/HLG
             if 'dolby_vision' in sample_desc:
                 dv_info = sample_desc['dolby_vision']
                 if dv_info['profile'] == 5:
@@ -427,21 +427,50 @@ class Mp4Track:
                         brand = 'db1p'
                         if brand in self.parent.info['file']['compatible_brands']:
                             self.dv_brand = brand
+                        else:
+                            print('WARNING: missing brand "db1p" in MP4 file for Dolby Vision Profile 8.1.')
+                        self.supplemental_profile = brand
+                        self.transfer_characteristics = '16'
+                        self.matrix_coefficients = '9'
+                        self.colour_primaries = '9'
                     elif bl_compatibility_id == 2:
                         self.video_range = 'SDR'
                         brand = 'db2g'
                         if brand in self.parent.info['file']['compatible_brands']:
                             self.dv_brand = brand
+                        self.supplemental_profile = brand
                     elif bl_compatibility_id == 4:
                         self.video_range = 'HLG'
+                        self.matrix_coefficients = '9'
+                        self.colour_primaries = '9'
                         if 'db4g' in self.parent.info['file']['compatible_brands']:
-                            self.dv_brand = 'db4g'
-                        elif 'db4h' in self.parent.info['file']['compatible_brands']:
-                            self.dv_brand = 'db4h'
+                            brand = 'db4g'
+                            self.dv_brand = brand
+                            self.supplemental_profile = brand
+                            self.transfer_characteristics = '14'
+                        else:
+                            brand = 'db4h'
+                            self.dv_brand = brand
+                            self.supplemental_profile = brand
+                            self.transfer_characteristics = '18'
+                            if 'db4h' not in self.parent.info['file']['compatible_brands']:
+                                print('WARNING: missing brand "db4g" or "db4h" in MP4 file for Dolby Vision Profile 8.4. Will use "db4h" as default.')
                     else:
                         PrintErrorAndExit('ERROR: unsupported ccid for Dolby Vision profile 8/9.')
                 else:
                     PrintErrorAndExit('ERROR: unsupported Dolby Vision profile.')
+            elif 'color_info' in sample_desc:
+                tc = sample_desc['color_info'].get('transfer_characteristics', 1)
+                if tc == 16: 
+                    self.video_range = 'PQ'
+                elif tc == 18: 
+                    self.video_range = 'HLG'
+            elif 'vpx_info' in sample_desc:
+                tc = sample_desc['vpx_info'].get('transfer_characteristics', 1)
+                if tc == 16: 
+                    self.video_range = 'PQ'
+                elif tc == 18:
+                    self.video_range = 'HLG'
 
         if self.type == 'audio':
             self.sample_rate = sample_desc['sample_rate']
@@ -472,7 +501,11 @@ class Mp4Track:
                             self.dolby_ac4_cbi = 'Yes'
                             self.channels = self.channels + '/IMSA'
             elif 'mpeg_4_audio_decoder_config' in sample_desc:
-                self.channels = sample_desc['mpeg_4_audio_decoder_config']['channels']
+                adc = sample_desc['mpeg_4_audio_decoder_config']
+                self.channels = adc['channels']
+                # For HE-AAC/SBR, use the output sample rate signaled in the extension config.
+                if 'sampling_frequency' in adc:
+                    self.sample_rate = adc['sampling_frequency']
 
         self.language = info['language']
         self.language_name = LanguageNames.get(LanguageCodeMap.get(self.language, 'und'), '')

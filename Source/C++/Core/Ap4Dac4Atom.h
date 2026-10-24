@@ -81,6 +81,7 @@ public:
             AP4_UI08 b_substream_contains_bed_objects;
             AP4_UI08 b_substream_contains_dynamic_objects;
             AP4_UI08 b_substream_contains_ISF_objects;
+            AP4_UI08 ss_idx;
 
             // methods
             AP4_Result ParseSubstreamInfoChan(AP4_BitReader &bits, 
@@ -277,6 +278,7 @@ public:
     static AP4_Dac4Atom* Create(AP4_Size size, AP4_ByteStream& stream);
 
     // constructors
+    AP4_Dac4Atom(const AP4_Dac4Atom& other);
     AP4_Dac4Atom(AP4_UI32 size, const Ac4Dsi* ac4Dsi);  // DSI vaiable initialize m_RawBytes (m_Dsi -> m_RawBytes)
 
     // destructor
@@ -297,7 +299,6 @@ public:
     
 private:
     // methods
-    AP4_Dac4Atom(const AP4_Dac4Atom& other);
     AP4_Dac4Atom(AP4_UI32 size, const AP4_UI08* payload); // box data initialize m_Dsi (m_RawBytes -> m_Dsi)
     
     // members

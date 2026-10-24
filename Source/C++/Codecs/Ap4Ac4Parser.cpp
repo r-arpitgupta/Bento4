@@ -36,26 +36,31 @@ bool AP4_Ac4Header::m_DeprecatedV0 = true;
 /*----------------------------------------------------------------------+
 |    AP4_Ac4Header::AP4_Ac4Header
 +----------------------------------------------------------------------*/
-AP4_Ac4Header::AP4_Ac4Header(const AP4_UI08* bytes, unsigned int size)
+AP4_Ac4Header::AP4_Ac4Header(const AP4_UI08* bytes, unsigned int size, bool header_exists)
 {
     /* Read the entire the frame */
     AP4_BitReader bits(bytes, size);
 
-    m_SyncWord = bits.ReadBits(16);
-    m_HeaderSize = 2;
-    if (m_SyncWord == AP4_AC4_SYNC_WORD_CRC){
-        m_CrcSize = 2;
-    }else {
-        m_CrcSize = 0;
-    }
-    m_FrameSize = bits.ReadBits(16);
-    m_HeaderSize += 2;
-    if (m_FrameSize == 0xFFFF){
-        m_FrameSize = bits.ReadBits(24);
-        m_HeaderSize += 3; 
+    /* Sync word and frame_size()*/
+    if (header_exists) {
+        m_SyncWord = bits.ReadBits(16);
+        m_HeaderSize = 2;
+        if (m_SyncWord == AP4_AC4_SYNC_WORD_CRC){
+            m_CrcSize = 2;
+        }else {
+            m_CrcSize = 0;
+        }
+        m_FrameSize = bits.ReadBits(16);
+        m_HeaderSize += 2;
+        if (m_FrameSize == 0xFFFF){
+            m_FrameSize = bits.ReadBits(24);
+            m_HeaderSize += 3;
+        }
     }
 
     /* Begin to parse TOC */
+    unsigned int tocStart = bits.GetBitsPosition() / 8;
+
     m_BitstreamVersion = bits.ReadBits(2);
     if (m_BitstreamVersion == 3) {
         m_BitstreamVersion = AP4_Ac4VariableBits(bits, 2);
@@ -168,31 +173,40 @@ AP4_Ac4Header::AP4_Ac4Header(const AP4_UI08* bytes, unsigned int size)
                 m_PresentationV1[pres_idx].d.v1.dolby_atmos_indicator |= m_PresentationV1[pres_idx].d.v1.substream_groups[sg].d.v1.dolby_atmos_indicator;
             }
         }
-        delete [] substream_groups;
+        delete[] substream_groups;
 
         if (bObjorAjoc == 0){
             m_ChannelCount = AP4_Ac4ChannelCountFromSpeakerGroupIndexMask(speakerGroupIndexMask);
         }else {
-            m_ChannelCount = channelCount;
+            m_ChannelCount = 2;
         }
     }
-}
 
-AP4_Ac4Header::~AP4_Ac4Header()
-{
-    if (m_PresentationV1) {
-        assert(m_PresentationV1 != NULL);
-        for (unsigned int pres_idx = 0; pres_idx < m_NPresentations; pres_idx++) {
-            assert(m_PresentationV1[pres_idx].d.v1.substream_groups != NULL);
-            for (int j = 0; j < m_PresentationV1[pres_idx].d.v1.n_substream_groups; j++)
-                delete[] m_PresentationV1[pres_idx].d.v1.substream_groups[j].d.v1.substreams;
-            delete[] m_PresentationV1[pres_idx].d.v1.substream_groups;
-            delete[] m_PresentationV1[pres_idx].d.v1.substream_group_indexs;
-        }
-        delete[] m_PresentationV1;
+    // substream_index_table
+    AP4_UI32 n_substreams = bits.ReadBits(2);
+    if (n_substreams == 0) {
+        n_substreams = AP4_Ac4VariableBits(bits, 2) + 4;
     }
+    AP4_UI08 b_size_present;
+    if (n_substreams == 1) {
+        b_size_present = bits.ReadBit();
+    } else {
+        b_size_present = 1;
+    }
+    if (b_size_present) {
+        for (AP4_UI32 s = 0; s < n_substreams; s++) {
+            AP4_UI08 b_more_bits = bits.ReadBit();
+            AP4_UI32 substream_size = bits.ReadBits(10);
+            if (b_more_bits) {
+                substream_size += (AP4_Ac4VariableBits(bits, 2) << 10);
+            }
+        }
+    }
+    if (bits.GetBitsPosition() % 8) {
+        bits.SkipBits(8 - (bits.GetBitsPosition() % 8));
+    }
+    m_TocSize = (AP4_UI32)(bits.GetBitsPosition() / 8 - tocStart);
 }
-
 
 /*----------------------------------------------------------------------+
 |    AP4_Ac4Header::MatchFixed
@@ -368,7 +382,7 @@ AP4_Result
 AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
 {
     unsigned int   available;
-    unsigned char  raw_header[AP4_AC4_HEADER_SIZE];
+    unsigned char  *raw_header = new unsigned char[AP4_AC4_HEADER_SIZE];
     AP4_Result     result;
 
     /* align to the start of the next byte */
@@ -385,6 +399,8 @@ AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
         return AP4_ERROR_NOT_ENOUGH_DATA;
     }
 
+    delete[] raw_header;
+    raw_header = new unsigned char[sync_frame_size];
     /*
      * Error handling to skip the 'fake' sync word. 
      * - the maximum sync frame size is about (AP4_BITSTREAM_BUFFER_SIZE - 1) bytes.
@@ -396,15 +412,10 @@ AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
         }
         return AP4_ERROR_NOT_ENOUGH_DATA;
     }
-
-    unsigned char *rawframe = new unsigned char[sync_frame_size];
-
     // copy the whole frame becasue toc size is unknown
-    m_Bits.PeekBytes(rawframe, sync_frame_size);
+    m_Bits.PeekBytes(raw_header, sync_frame_size);
     /* parse the header */
-    AP4_Ac4Header ac4_header(rawframe, sync_frame_size);
-
-    delete[] rawframe;
+    AP4_Ac4Header ac4_header(raw_header, sync_frame_size);
 
     // Place before goto statement to resolve Xcode compiler issue
     unsigned int bit_rate_mode = 0;
@@ -421,33 +432,31 @@ AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
     // TODO: find the proper AP4_AC4_MAX_TOC_SIZE or just parse what this step need ?
     if (available >= ac4_header.m_FrameSize + ac4_header.m_HeaderSize + ac4_header.m_CrcSize + AP4_AC4_HEADER_SIZE + AP4_AC4_MAX_TOC_SIZE) {
         // enough to peek at the header of the next frame
+        unsigned char *peek_raw_header = new unsigned char[AP4_AC4_HEADER_SIZE];
 
         m_Bits.SkipBytes(ac4_header.m_FrameSize + ac4_header.m_HeaderSize + ac4_header.m_CrcSize);
-        m_Bits.PeekBytes(raw_header, AP4_AC4_HEADER_SIZE);
+        m_Bits.PeekBytes(peek_raw_header, AP4_AC4_HEADER_SIZE);
 
         // duplicated work, just to get the frame size
-        AP4_BitReader peak_tmp_bits(raw_header, AP4_AC4_HEADER_SIZE);
-        unsigned int next_sync_frame_size = GetSyncFrameSize(peak_tmp_bits);
+        AP4_BitReader peak_tmp_bits(peek_raw_header, AP4_AC4_HEADER_SIZE);
+        unsigned int peak_sync_frame_size = GetSyncFrameSize(peak_tmp_bits);
 
-        unsigned char *next_rawframe = new unsigned char[next_sync_frame_size];
-
+        delete[] peek_raw_header;
+        peek_raw_header = new unsigned char[peak_sync_frame_size];
         // copy the whole frame becasue toc size is unknown
-        if (m_Bits.GetBytesAvailable() < (next_sync_frame_size)) {
-            next_sync_frame_size = m_Bits.GetBytesAvailable();
+        if (m_Bits.GetBytesAvailable() < (peak_sync_frame_size)) {
+            peak_sync_frame_size = m_Bits.GetBytesAvailable();
         }
-        m_Bits.PeekBytes(next_rawframe, next_sync_frame_size);
+        m_Bits.PeekBytes(peek_raw_header, peak_sync_frame_size);
 
         m_Bits.SkipBytes(-((int)(ac4_header.m_FrameSize + ac4_header.m_HeaderSize + ac4_header.m_CrcSize)));
 
         /* check the header */
-        AP4_Ac4Header peek_ac4_header(next_rawframe, next_sync_frame_size);
-
-        delete[] next_rawframe;
-
+        AP4_Ac4Header peek_ac4_header(peek_raw_header, peak_sync_frame_size, true);
         result = peek_ac4_header.Check();
         if (AP4_FAILED(result)) {
             // TODO: need to reserve current sync frame ?
-            m_Bits.SkipBytes(sync_frame_size + next_sync_frame_size);
+            m_Bits.SkipBytes(sync_frame_size + peak_sync_frame_size);
             goto fail;
         }
 
@@ -455,7 +464,7 @@ AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
         /* fixed part of the previous header                           */
         if (!AP4_Ac4Header::MatchFixed(ac4_header, peek_ac4_header)) {
             // TODO: need to reserve current sync frame ?
-            m_Bits.SkipBytes(sync_frame_size + next_sync_frame_size);
+            m_Bits.SkipBytes(sync_frame_size + peak_sync_frame_size);
             goto fail;
         }
     } else if (available < (ac4_header.m_FrameSize + ac4_header.m_HeaderSize + ac4_header.m_CrcSize) || (m_Bits.m_Flags & AP4_BITSTREAM_FLAG_EOS) == 0) {
@@ -494,7 +503,35 @@ AP4_Ac4Parser::FindFrame(AP4_Ac4Frame& frame)
     frame.m_Info.m_Ac4Dsi.d.v1.ac4_bitrate_dsi.bit_rate = 0;                    // unknown, fixed value now
     frame.m_Info.m_Ac4Dsi.d.v1.ac4_bitrate_dsi.bit_rate_precision = 0xffffffff; // unknown, fixed value now
     frame.m_Info.m_Ac4Dsi.d.v1.n_presentations = ac4_header.m_NPresentations;
-    frame.m_Info.m_Ac4Dsi.d.v1.presentations   = ac4_header.m_PresentationV1;
+
+    if (ac4_header.m_PresentationV1) {
+        assert(ac4_header.m_PresentationV1 != NULL);
+        frame.m_Info.m_Ac4Dsi.d.v1.presentations = new AP4_Dac4Atom::Ac4Dsi::PresentationV1[ac4_header.m_NPresentations];
+        AP4_CopyMemory(frame.m_Info.m_Ac4Dsi.d.v1.presentations,
+                       ac4_header.m_PresentationV1,
+                       sizeof(AP4_Dac4Atom::Ac4Dsi::PresentationV1) * ac4_header.m_NPresentations);
+        for (unsigned int pres_idx = 0; pres_idx < ac4_header.m_NPresentations; pres_idx++) {
+            assert(ac4_header.m_PresentationV1[pres_idx].d.v1.substream_groups != NULL);
+            unsigned int n_substream_group = ac4_header.m_PresentationV1[pres_idx].d.v1.n_substream_groups;
+            frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_groups = new AP4_Dac4Atom::Ac4Dsi::SubStreamGroupV1[n_substream_group];
+            frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_group_indexs = new AP4_UI32[n_substream_group];
+            AP4_CopyMemory(frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_group_indexs,
+                           ac4_header.m_PresentationV1[pres_idx].d.v1.substream_group_indexs,
+                           sizeof(AP4_UI32)*n_substream_group);
+            AP4_CopyMemory(frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_groups,
+                           ac4_header.m_PresentationV1[pres_idx].d.v1.substream_groups,
+                           sizeof(AP4_Dac4Atom::Ac4Dsi::SubStreamGroupV1)*n_substream_group);
+            for (unsigned int sg_idx = 0; sg_idx < n_substream_group; sg_idx++) {
+                assert(ac4_header.m_PresentationV1[pres_idx].d.v1.substream_groups[sg_idx].d.v1.substreams != NULL);
+                int n_substreams = ac4_header.m_PresentationV1[pres_idx].d.v1.substream_groups[sg_idx].d.v1.n_substreams;
+                frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_groups[sg_idx].d.v1.substreams
+                    = new AP4_Dac4Atom::Ac4Dsi::SubStream[n_substreams];
+                AP4_CopyMemory(frame.m_Info.m_Ac4Dsi.d.v1.presentations[pres_idx].d.v1.substream_groups[sg_idx].d.v1.substreams,
+                               ac4_header.m_PresentationV1[pres_idx].d.v1.substream_groups[sg_idx].d.v1.substreams,
+                               sizeof(AP4_Dac4Atom::Ac4Dsi::SubStream) * n_substreams);
+            }
+        }
+    }
 
     /* set the frame source */
     frame.m_Source = &m_Bits;

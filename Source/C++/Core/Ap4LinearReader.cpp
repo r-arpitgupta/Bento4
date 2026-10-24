@@ -460,6 +460,7 @@ AP4_LinearReader::Advance(bool read_data)
             }
             if (AP4_FAILED(result)) {
                 delete buffer;
+                next_tracker->m_NextSample = NULL;
                 return result;
             }
 
@@ -620,6 +621,8 @@ AP4_LinearReader::FindTracker(AP4_UI32 track_id)
 AP4_LinearReader::Tracker::~Tracker()
 {
     if (m_SampleTableIsOwned) delete m_SampleTable;
+    m_Samples.DeleteReferences();
+    delete m_NextSample;
     delete m_Reader;
 }
 
