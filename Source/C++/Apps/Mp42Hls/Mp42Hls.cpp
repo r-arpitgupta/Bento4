@@ -2368,17 +2368,6 @@ main(int argc, char** argv)
             double sample_count = (double)video_track->GetSampleCount();
             double media_duration = (double)video_track->GetMediaDuration();
             double timescale = (double)video_track->GetMediaTimeScale();
-            // use the sample durations: FFmpeg >= 5 writes an mdhd duration that is
-            // longer than the samples for B-frame video
-            AP4_Sample first_sample, last_sample;
-            AP4_Ordinal count = video_track->GetSampleCount();
-            if (count && AP4_SUCCEEDED(video_track->GetSample(0, first_sample)) &&
-                AP4_SUCCEEDED(video_track->GetSample(count-1, last_sample))) {
-                AP4_UI64 samples_end = last_sample.GetDts()+last_sample.GetDuration();
-                if (samples_end > first_sample.GetDts()) {
-                    media_duration = (double)(samples_end-first_sample.GetDts());
-                }
-            }
             if (media_duration > 0.0) {
                 frame_rate = sample_count/(media_duration/timescale);
             }
