@@ -196,9 +196,28 @@ PrintUsageAndExit()
     exit(1);
 }
 
-static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp){
+static bool IsCuePointAtSample(AP4_Array<double>& cue_points, double timestamp, double tolerance = 0.0, bool merge_pending = false){
+    if (merge_pending) {
+        // every cue point up to this sync sample is placed here once; a cue point
+        // with no sync sample on it lands on the next one, and further cue points
+        // before the same sync sample are dropped instead of carried to later ones
+        unsigned int placed = 0;
+        while (cue_points.ItemCount()>0 && cue_points[cue_points.ItemCount()-1]<=timestamp+tolerance){
+            double cue_point = cue_points[cue_points.ItemCount()-1];
+            if (placed) {
+                fprintf(stderr, "WARNING: dropping cue point %.5f, a cue point is already placed at sync sample %.5f\n",
+                        cue_point, timestamp);
+            } else if (cue_point<timestamp-tolerance) {
+                fprintf(stderr, "WARNING: cue point %.5f has no sync sample, placed at next sync sample %.5f\n",
+                        cue_point, timestamp);
+            }
+            cue_points.RemoveLast();
+            ++placed;
+        }
+        return placed>0;
+    }
     if (cue_points.ItemCount()>0){
-        if (cue_points[cue_points.ItemCount()-1]<=timestamp){
+        if (cue_points[cue_points.ItemCount()-1]<=timestamp+tolerance){
             cue_points.RemoveLast();
             return true;
         }
@@ -1036,6 +1055,27 @@ ReadSample(SampleReader&   reader,
 }
 
 /*----------------------------------------------------------------------
+|   GetEditListMediaTime
++---------------------------------------------------------------------*/
+// Media time (in seconds) at which presentation starts, taken from the
+// first non-empty edit list entry. Returns 0 when there is no edit list.
+static double
+GetEditListMediaTime(AP4_Track* track)
+{
+    if (track == NULL || track->GetTrakAtom() == NULL) return 0.0;
+    AP4_TrakAtom* trak = const_cast<AP4_TrakAtom*>(track->GetTrakAtom());
+    AP4_ElstAtom* elst = AP4_DYNAMIC_CAST(AP4_ElstAtom, trak->FindChild("edts/elst"));
+    if (elst == NULL || track->GetMediaTimeScale() == 0) return 0.0;
+    AP4_Array<AP4_ElstEntry>& entries = elst->GetEntries();
+    for (unsigned int i = 0; i < entries.ItemCount(); i++) {
+        if (entries[i].m_MediaTime >= 0) {
+            return (double)entries[i].m_MediaTime/(double)track->GetMediaTimeScale();
+        }
+    }
+    return 0.0;
+}
+
+/*----------------------------------------------------------------------
 |   WriteSamples
 +---------------------------------------------------------------------*/
 static AP4_Result
@@ -1083,7 +1123,13 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
     AP4_Result              result = AP4_SUCCESS;
     AP4_Array<bool>         cue_points_positions;
     double                  drift = 0.0;
-    
+    double                  audio_media_time = GetEditListMediaTime(audio_track);
+    double                  video_media_time = GetEditListMediaTime(video_track);
+    double                  audio_end = 0.0;
+    if (audio_track && audio_track->GetMediaTimeScale()) {
+        audio_end = (double)audio_track->GetMediaDuration()/(double)audio_track->GetMediaTimeScale();
+    }
+
     // prime the samples
     if (audio_reader) {
         result = ReadSample(*audio_reader, *audio_track, audio_sample, audio_sample_data, audio_ts, audio_frame_duration, audio_eos);
@@ -1110,7 +1156,15 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
             }
         }
         if (video_track && !video_eos) {
-            if (audio_track) {
+            if (audio_track && audio_eos) {
+                // audio has ended: keep the video samples that start before the
+                // end of the audio, compared on the presentation timeline (edit
+                // lists applied). audio_ts is the audio end once audio_eos is set.
+                double vPts = (double)video_sample.GetCts()/(double)video_track->GetMediaTimeScale() - video_media_time;
+                if (vPts + 1e-6 < audio_ts - audio_media_time) {
+                    chosen_track = video_track;
+                }
+            } else if (audio_track) {
                 double aPts = (double)audio_sample.GetCts()/(double)audio_track->GetMediaTimeScale();
                 double vPts = (double)video_sample.GetCts()/(double)video_track->GetMediaTimeScale();
                 if (vPts <= aPts) {
@@ -1145,7 +1199,9 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
 
             bool is_cue_point_atsample;
             if (video_track) {
-                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts);
+                // a sync sample is forced on each cue point: match it within half a
+                // frame, and place at most one cue point per sync sample
+                is_cue_point_atsample=IsCuePointAtSample(Options.cue_points, video_ts, video_frame_duration/2.0, true);
             } else {
                 double cue_point=0.0;
                 if (Options.cue_points.ItemCount()>0){
@@ -1159,9 +1215,15 @@ WriteSamples(AP4_Mpeg2TsWriter*               ts_writer,
                     drift=audio_ts-cue_point;
                 }
             }
-            if ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
+            // audio only: the audio left after the last boundary is no longer than
+            // the priming (edit list media time) plus one frame; keep it in the
+            // current segment instead of writing a near-empty last segment
+            bool is_audio_tail = !video_track && audio_track && chosen_track != NULL && !is_cue_point_atsample &&
+                                 audio_end > 0.0 && audio_end-audio_ts <= audio_media_time+audio_frame_duration+1e-6;
+            if (!is_audio_tail &&
+                ((segment_duration >= (double)Options.segment_duration - (double)segment_duration_threshold/1000.0) ||
                 chosen_track == NULL || is_cue_point_atsample ||
-                (!video_track && audio_track && segment_duration >= (double)Options.segment_duration-drift )) {
+                (!video_track && audio_track && segment_duration >= (double)Options.segment_duration-drift ))) {
                 if (!video_track && audio_track && !is_cue_point_atsample) {
                     drift +=  segment_duration-Options.segment_duration;
                 }
